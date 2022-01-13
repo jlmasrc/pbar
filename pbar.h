@@ -1,5 +1,5 @@
 /*
-  pbar: small C library for easy and flaxible progress bar display in terminal.
+  pbar: small C library for easy and flexible progress bar display in terminal.
   Features: terminal width autodetection, progress bar, percent progress,
   absolute progress, wheel animation, elapsed time, remaining time.
 
