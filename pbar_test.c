@@ -37,7 +37,14 @@ int main(int argc, char **argv) {
      %e: elapsed time
      %r: remaining time */
 
-  /* Full featured format string. */
+  /* The first and second arguments are the initial and final values
+     for the progress parameter (in this case, the variable n
+     below). They can be positive or negative, integer or floating
+     point and the initial value may be greater than the final value
+     (in case of a decreasing progress parameter).
+
+     The third argument is the format string (here, a full featured
+     one). */
   p = pbar_new(0, END - 1, "%a %p [%b] %w Elapsed: %e, Remaining: %r");
 
   /* The behavior can be changed after pbar_new():
