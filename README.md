@@ -1,2 +1,3 @@
 # pbar
-Small C library for easy and flaxible progress bar display in terminal.
+Small C library for easy and flexible progress bar display in terminal.
+See pbar_test.c for usage.
