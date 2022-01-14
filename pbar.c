@@ -1,7 +1,14 @@
 /*
   pbar: small C library for easy and flexible progress bar display in terminal.
-  Features: progress bar, percent progress, absolute progress, wheel animation,
-  elapsed time, remaining time.
+  Features:
+  * very low processor usage
+  * progress bar
+  * percent progress
+  * absolute progress
+  * wheel animation
+  * elapsed time
+  * remaining time
+  * terminal width autodetection
 
   Copyright (C) 2022  Joao Luis Meloni Assirati.
 
@@ -38,9 +45,9 @@ static double gettimef(void) {
   return t.tv_sec + 1E-9 * t.tv_nsec;
 }
 
-static int termwidth(void) {
+static int termwidth(int fd) {
   struct winsize w;
-  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+  ioctl(fd, TIOCGWINSZ, &w);
   return w.ws_col;
 }
 
@@ -71,24 +78,18 @@ static int timestr(char *s, time_t t) {
 /* (pbar *) and (state *) can be casted one into another */
 typedef struct state {
   pbar public;
-
   double work_start;
   double work_end;
-  double work_mark;
   double work_lastupdate;
   double time_start;
   double time_lastupdate;
   double time_usage;
   int wheel_counter;
-
-  int (*print)(struct state *st, double work);
-  int (*update)(struct state *st, double work);
 } state;
 
-static int update(state *st, double work) {
+static int update(state *st, double work, double now) {
   pbar *p = &(st->public);
   double delta = st->work_end - st->work_start;
-  double now = gettimef();
   double dt = now - st->time_lastupdate;
   
   p->elapsed_time = now - st->time_start;
@@ -101,26 +102,18 @@ static int update(state *st, double work) {
     p->work_done = fabs((work - st->work_start) / delta);
   }
   
-  st->time_lastupdate = now;
-  st->work_lastupdate = work;
-
-  st->work_mark = work
-    + p->update_period * (st->work_mark - st->work_start) / p->elapsed_time;
+  p->work_mark = work
+    + p->update_period * (p->work_mark - st->work_start) / p->elapsed_time;
 
   p->pbar_load = 100 * st->time_usage / p->elapsed_time;
 
-  st->time_usage += gettimef() - st->time_lastupdate;
+  st->work_lastupdate = work;
+  st->time_lastupdate = now;
 
-  /* If dt is too discrepant from p->update_period, reject this iteration. */
+  /* If dt is too discrepant from p->update_period, reject this
+     iteration. This will happen in the first 2 or 3 calls to
+     update() */
   return fabs((1 - dt/p->update_period)) < 0.5;
-}
-
-static int inc_update(state *st, double work) {
-  return work >= st->work_mark && update(st, work);
-}
-
-static int dec_update(state *st, double work) {
-  return work <= st->work_mark && update(st, work);
 }
 
 /********************************************************************* State **/
@@ -130,11 +123,11 @@ static int dec_update(state *st, double work) {
 
 static void print_bar(state *st, int cols_taken) {
   int i,
-    c = termwidth() - cols_taken - 1,
+    c = termwidth(fileno(st->public.output)) - cols_taken - 1,
     n = c * st->public.work_done;
 
-  for(i = 0; i < n; i++) fputc(st->public.bar_fill, stdout);
-  for(i = n; i < c; i++) fputc(' ', stdout);
+  for(i = 0; i < n; i++) fputc(st->public.bar_fill, st->public.output);
+  for(i = n; i < c; i++) fputc(' ', st->public.output);
 }
 
 static int wheel(state *st) {
@@ -145,10 +138,11 @@ static int wheel(state *st) {
 
 static void print(state *st, double work) {
   char *f;
-  int cols_taken = 0;
+  int cols_taken;
   field str_absolute, str_percent, str_elapsed, str_remain, str_load;
 
   /* First format pass: fill fields and calculate the number of columns */
+  cols_taken = 0;
   for(f = st->public.print_format; *f; f++) {
     if(*f == '%') {
       f++;
@@ -168,6 +162,7 @@ static void print(state *st, double work) {
 	break;
       case 'w':
 	cols_taken += 1;
+	break;
       case 'L':
 	cols_taken += sprn(str_load, "%.2f%%", st->public.pbar_load);
 	break;
@@ -182,56 +177,39 @@ static void print(state *st, double work) {
   }
 
   /* Second format pass: print */
-  fputc('\r', stdout);
   for(f = st->public.print_format; *f; f++) {
     if(*f == '%') {
       f++;
       if(*f == '\0') break;
       switch(*f) {
       case 'a':
-	fputs(str_absolute, stdout);
+	fputs(str_absolute, st->public.output);
 	break;
       case 'p':
-	fputs(str_percent, stdout);
+	fputs(str_percent, st->public.output);
 	break;
       case 'e':
-	fputs(str_elapsed, stdout);
+	fputs(str_elapsed, st->public.output);
 	break;
       case 'r':
-	fputs(str_remain, stdout);
+	fputs(str_remain, st->public.output);
 	break;
       case 'w':
-	fputc(wheel(st), stdout);
+	fputc(wheel(st), st->public.output);
 	break;
       case 'L':
-	fputs(str_load, stdout);
+	fputs(str_load, st->public.output);
 	break;
       case 'b':
 	print_bar(st, cols_taken);
 	break;
       default:
-	fputc(*f, stdout);
+	fputc(*f, st->public.output);
       }
     } else {
-      fputc(*f, stdout);
+      fputc(*f, st->public.output);
     }
   }
-  fflush(stdout);
-
-  /* Recalculate st->time_usage (calculated before in pbar_update) */
-  st->time_usage += gettimef() - st->time_lastupdate;
-}
-
-static int inc_print(state *st, double work) {
-  if(work < st->work_mark || !update(st, work)) return 0;
-  print(st, work);
-  return 1;
-}
-
-static int dec_print(state *st, double work) {
-  if(work > st->work_mark || !update(st, work)) return 0;
-  print(st, work);
-  return 1;
 }
 
 /********************************************************* Terminal printing **/
@@ -242,43 +220,69 @@ static int dec_print(state *st, double work) {
 pbar *pbar_new(double work_start, double work_end, char *print_format) {
   state *st = malloc(sizeof(*st));
 
+  /* These are members of struct pbar and can be modified after
+     pbar_new(). They are not modified by the pbar library after
+     pbar_new(). */
+  st->public.print_format = print_format;
+  st->public.update_period = 0.2;
+  st->public.wheel = "|/-\\"; /* Other possibilities: ".oOo", "+x" */
+  st->public.bar_fill = '#';
+  st->public.output = stderr;
+
+  /* These members of struct pbar should not be modified. They are
+     used by inline functions in pbar.h */
+  st->public.work_mark = work_start;
+  st->public.increasing = work_end > work_start;
+
+  /* The other members of struct pbar have useful data that can be
+     read by the user but should not be modified. They change across
+     calls to pbar_update_() and pbar_print_() */
+
+  /* These are private members not available outside the pbar library */
   st->work_start = work_start;
   st->work_end = work_end;
-  st->work_mark = work_start;
   st->time_start = gettimef();
   st->time_usage = 0;
   st->wheel_counter = 0;
-
   st->work_lastupdate = st->work_start;
   st->time_lastupdate = st->time_start;
-
-  st->public.print_format = print_format;
-  st->public.update_period = 0.2;
-  /* Other possibilities: ".oOo", "+x" */
-  st->public.wheel = "|/-\\";
-  st->public.bar_fill = '#';
-
-  st->print = work_end > work_start ? inc_print : dec_print;
-  st->update = work_end > work_start ? inc_update : dec_update;
-
+  
   return &(st->public);
 }
 
 void pbar_close(pbar *p) {
+  double now = gettimef();
   state *st = (state *)p;
-  update(st, st->work_end);
-  print(st, st->work_end);
-  fputc('\n', stdout);
-  fflush(stdout);
+  update(st, st->work_end, now);
+  if(isatty(fileno(p->output))) {
+    fputc('\r', st->public.output);
+    print(st, st->work_end);
+    fputc('\n', st->public.output);
+    fflush(st->public.output);
+  }
   free(st);
+  st->time_usage += gettimef() - now;
 }
 
-int pbar_update(pbar *p, double work) {
-  return ((state *)p)->update((state *)p, work);
+int pbar_update_(pbar *p, double work) {
+  double now = gettimef();
+  state *st = (state *)p;
+  int r = update(st, work, now);
+  st->time_usage += gettimef() - now;
+  return r;
 }
 
-int pbar_print(pbar *p, double work) {
-  return ((state *)p)->print((state *)p, work);
+int pbar_print_(pbar *p, double work) {
+  double now = gettimef();
+  state *st = (state *)p;
+  int r = update(st, work, now);
+  if(r && isatty(fileno(p->output))) {
+    fputc('\r', st->public.output);
+    print((state *)p, work);
+    fflush(st->public.output);
+  }
+  st->time_usage += gettimef() - now;
+  return r;
 }
 
 /********************************************************** Public functions **/

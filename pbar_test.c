@@ -1,6 +1,6 @@
 /*
   pbar: example program. Compile with
-  gcc -o pbar_test pbar_test.c pbar.c -lm
+  gcc -O3 -o pbar_test pbar_test.c pbar.c -lm
 
   Copyright (C) 2022  Joao Luis Meloni Assirati.
 
@@ -23,11 +23,12 @@
 #include "pbar.h"
 
 /* Change this value for program duration */
-#define END 2000000000
+#define END 10000000000
 
 int main(int argc, char **argv) {
   long int n;
   pbar *p;
+  double s;
 
   /* Format string:
      %a: absolute progress
@@ -45,7 +46,7 @@ int main(int argc, char **argv) {
 
      The third argument is the format string (here, a full featured
      one). */
-  p = pbar_new(0, END - 1, "%a %p [%b] %w Elapsed: %e, Remaining: %r");
+  p = pbar_new(1, END, "%a %p [%b] %w ET: %e, RT: %r");
 
   /* The behavior can be changed after pbar_new():
      p->print_format = <string>: change the format string
@@ -54,20 +55,32 @@ int main(int argc, char **argv) {
      p->bar_fill = <char>: change the character that fills the progress bar.
        Default value is '#'.
      p->update_period = <value>: change how often the progress bar is updated
-       in seconds. Default value is 0.2. */
+       in seconds. Default value is 0.2.
+     p->output = <stream>: change the output of pbar. Default value is stderr.
+       Other possibility: stdout. pbar will only produce output if <stream> is
+       a terminal, so program output can be safely redirected to a file. */
 
-  for(n = 0; n < END; n++) {
-    /* Do something useful here */
+  s = 0;
+  for(n = 1; n <= END; n++) {
+    /* Real work */
+    s += n;
 
     /* pbar_print() will only do something every p->update_period
        seconds. During execution, the variables p->elapsed_time,
-       p->remaining_time and p->work_done can be read. */
+       p->remaining_time and p->work_done can be read.
+
+       pbar_print() will impact only around 15% more execution time in
+       this very thin workload per cycle (s += n) with gcc with -O3 in
+       amd64. For more intense workloads per cycle, the impact is
+       negligible (try s += 1.0 / n instead of s += n). */
     pbar_print(p, n);
   }
 
   /* This function must be called after the loop for ensuring a 100% progress
      display and free memory allocated in p. */
   pbar_close(p);
+
+  printf("\ns = %.0f\n", s);
 
   return 0;
 }

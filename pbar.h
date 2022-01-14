@@ -1,7 +1,6 @@
 /*
   pbar: small C library for easy and flexible progress bar display in terminal.
-  Features: terminal width autodetection, progress bar, percent progress,
-  absolute progress, wheel animation, elapsed time, remaining time.
+  Features: see pbar.c.
 
   Copyright (C) 2022  Joao Luis Meloni Assirati.
 
@@ -22,20 +21,34 @@
 #ifndef PBAR_H
 #define PBAR_H
 
+#include <stdio.h>
+
 typedef struct pbar {
   char *print_format;
   char *wheel;
   char bar_fill;
+  FILE *output;
   double update_period;
   double elapsed_time;
   double remaining_time;
   double work_done;
   double pbar_load;
+  double work_mark;
+  int increasing;
 } pbar;
 
 pbar *pbar_new(double work_start, double work_end, char *format);
 void pbar_close(pbar *p);
-int pbar_update(pbar *p, double work);
-int pbar_print(pbar *p, double work);
+
+int pbar_update_(pbar *p, double work);
+int pbar_print_(pbar *p, double work);
+
+static inline int pbar_update(pbar *p, double work) {
+  return (p->increasing == (work >= p->work_mark)) && pbar_update_(p, work);
+}
+
+static inline int pbar_print(pbar *p, double work) {
+  return (p->increasing == (work >= p->work_mark)) && pbar_print_(p, work);
+}
 
 #endif /* PBAR_H */
