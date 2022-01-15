@@ -241,7 +241,7 @@ int pbar_update_(pbar *p, double parm) {
 
   /* If dt is too discrepant from p->update, reject this
      iteration. This will happen in the first 2 or 3 calls to
-     update(). */
+     pbar_update(). */
   if(fabs(1 - dt/p->update) > 0.5 && p->progress != 1) return 0;
 
   if(!isatty(fileno(p->output))) return 0;
