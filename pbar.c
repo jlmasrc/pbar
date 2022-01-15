@@ -4,10 +4,10 @@
   * very low processor usage
   * progress bar
   * percent progress
-  * absolute progress
   * wheel animation
   * elapsed time
   * remaining time
+  * user defined text and variables in the progress line
   * terminal width autodetection
 
   Copyright (C) 2022  Joao Luis Meloni Assirati.
@@ -27,13 +27,14 @@
 */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <time.h>
+
+#include <stdarg.h>
 
 #include "pbar.h"
 
@@ -73,216 +74,193 @@ static int timestr(char *s, time_t t) {
 /********************************************************* Support functions **/
 
 
-/** State *********************************************************************/
+/** Print functions ***********************************************************/
 
-/* (pbar *) and (state *) can be casted one into another */
-typedef struct state {
-  pbar public;
-  double work_start;
-  double work_end;
-  double work_lastupdate;
-  double time_start;
-  double time_lastupdate;
-  double time_usage;
-  int wheel_counter;
-} state;
-
-static int update(state *st, double work, double now) {
-  pbar *p = &(st->public);
-  double delta = st->work_end - st->work_start;
-  double dt = now - st->time_lastupdate;
-  
-  p->elapsed_time = now - st->time_start;
-  p->remaining_time = (st->work_end - work) * dt / (work - st->work_lastupdate);
-
-  if((delta > 0 && work >= st->work_end)||(delta < 0 && work <= st->work_end)) {
-    p->work_done = 1;
-  } else {
-    /* fabs() is needed because if delta < 0, then 0 / delta == -0 */
-    p->work_done = fabs((work - st->work_start) / delta);
-  }
-  
-  p->work_mark = work
-    + p->update_period * (p->work_mark - st->work_start) / p->elapsed_time;
-
-  p->pbar_load = 100 * st->time_usage / p->elapsed_time;
-
-  st->work_lastupdate = work;
-  st->time_lastupdate = now;
-
-  /* If dt is too discrepant from p->update_period, reject this
-     iteration. This will happen in the first 2 or 3 calls to
-     update() */
-  return fabs((1 - dt/p->update_period)) < 0.5;
-}
-
-/********************************************************************* State **/
-
-
-/** Terminal printing *********************************************************/
-
-static void print_bar(state *st, int cols_taken) {
+static void bar(pbar *p, int cols_taken) {
   int i,
-    c = termwidth(fileno(st->public.output)) - cols_taken - 1,
-    n = c * st->public.work_done;
+    /* We subtract 1 from the available columns to avoid a line break
+       when the full terminal line is used */
+    c = termwidth(fileno(p->output)) - cols_taken - 1,
+    n = c * p->progress;
 
-  for(i = 0; i < n; i++) fputc(st->public.bar_fill, st->public.output);
-  for(i = n; i < c; i++) fputc(' ', st->public.output);
+  /* In case of over 100%, just print a full bar */
+  if(n > c) n = c;
+
+  for(i = 0; i < n; i++) fputc(p->bar_fill, p->output);
+  for(i = n; i < c; i++) fputc(' ', p->output);
 }
 
-static int wheel(state *st) {
+static int wheel(pbar *p) {
   int w;
-  if((w = st->public.wheel[++st->wheel_counter]) != '\0') return w;
-  return st->public.wheel[st->wheel_counter = 0];
+  if((w = p->wheel[++p->wheel_count_]) != '\0') return w;
+  return p->wheel[p->wheel_count_ = 0];
 }
 
-static void print(state *st, double work) {
-  char *f;
+typedef struct fields {
+  char percent[MAXFIELD], elapsed[MAXFIELD], remain[MAXFIELD];
   int cols_taken;
-  field str_absolute, str_percent, str_elapsed, str_remain, str_load;
+} fields;
 
-  /* First format pass: fill fields and calculate the number of columns */
-  cols_taken = 0;
-  for(f = st->public.print_format; *f; f++) {
+static void fill_fields(pbar *p, fields *t, char *format, va_list ap) {
+  char *f;
+  va_list ap2;
+  
+  va_copy(ap2, ap);
+  t->cols_taken = 0;
+  for(f = format; *f; f++) {
     if(*f == '%') {
       f++;
       if(*f == '\0') break;
       switch(*f) {
-      case 'a':
-	cols_taken += sprn(str_absolute, "%.0f/%.0f", work, st->work_end);
-	break;
       case 'p':
-	cols_taken += sprn(str_percent, "%3.0f%%", 100 * st->public.work_done);
+	t->cols_taken += sprn(t->percent, "%3.0f%%", 100 * p->progress);
 	break;
       case 'e':
-	cols_taken += timestr(str_elapsed, st->public.elapsed_time);
+	t->cols_taken += timestr(t->elapsed, p->time_elapsed);
 	break;
       case 'r':
-	cols_taken += timestr(str_remain, st->public.remaining_time);
+	t->cols_taken += timestr(t->remain, p->time_remain);
 	break;
       case 'w':
-	cols_taken += 1;
+	t->cols_taken += 1;
 	break;
-      case 'L':
-	cols_taken += sprn(str_load, "%.2f%%", st->public.pbar_load);
+      case 's':
+	t->cols_taken += strlen(va_arg(ap2, char *));
 	break;
       case 'b':
 	break;
       default:
-	cols_taken++;
+	t->cols_taken++;
       }
     } else {
-      cols_taken++;
+      t->cols_taken++;
     }
   }
-
-  /* Second format pass: print */
-  for(f = st->public.print_format; *f; f++) {
-    if(*f == '%') {
-      f++;
-      if(*f == '\0') break;
-      switch(*f) {
-      case 'a':
-	fputs(str_absolute, st->public.output);
-	break;
-      case 'p':
-	fputs(str_percent, st->public.output);
-	break;
-      case 'e':
-	fputs(str_elapsed, st->public.output);
-	break;
-      case 'r':
-	fputs(str_remain, st->public.output);
-	break;
-      case 'w':
-	fputc(wheel(st), st->public.output);
-	break;
-      case 'L':
-	fputs(str_load, st->public.output);
-	break;
-      case 'b':
-	print_bar(st, cols_taken);
-	break;
-      default:
-	fputc(*f, st->public.output);
-      }
-    } else {
-      fputc(*f, st->public.output);
-    }
-  }
+  va_end(ap2);
 }
 
-/********************************************************* Terminal printing **/
+static void print_fields(pbar *p, fields *t, char *format, va_list ap) {
+  char *f;
+  va_list ap2;
+  
+  va_copy(ap2, ap);
+  for(f = format; *f; f++) {
+    if(*f == '%') {
+      f++;
+      if(*f == '\0') break;
+      switch(*f) {
+      case 'p':
+	fputs(t->percent, p->output);
+	break;
+      case 'e':
+	fputs(t->elapsed, p->output);
+	break;
+      case 'r':
+	fputs(t->remain, p->output);
+	break;
+      case 'w':
+	fputc(wheel(p), p->output);
+	break;
+      case 's':
+	fputs(va_arg(ap2, char *), p->output);
+	break;
+      case 'b':
+	bar(p, t->cols_taken);
+	break;
+      default:
+	fputc(*f, p->output);
+      }
+    } else {
+      fputc(*f, p->output);
+    }
+  }
+  va_end(ap2);
+}
+
+/*********************************************************** Print functions **/
 
 
 /** Public functions **********************************************************/
 
-pbar *pbar_new(double work_start, double work_end, char *print_format) {
-  state *st = malloc(sizeof(*st));
-
+void pbar_init(pbar *p, double parm_start, double parm_end) {
   /* These are members of struct pbar and can be modified after
      pbar_new(). They are not modified by the pbar library after
      pbar_new(). */
-  st->public.print_format = print_format;
-  st->public.update_period = 0.2;
-  st->public.wheel = "|/-\\"; /* Other possibilities: ".oOo", "+x" */
-  st->public.bar_fill = '#';
-  st->public.output = stderr;
+  p->update = 0.2;
+  p->wheel = "|/-\\"; /* Other possibilities: ".oOo", "+x" */
+  p->bar_fill = '#';
+  p->output = stderr;
 
   /* These members of struct pbar should not be modified. They are
      used by inline functions in pbar.h */
-  st->public.work_mark = work_start;
-  st->public.increasing = work_end > work_start;
+  p->mark_ = parm_start;
+  p->inc_ = parm_end > parm_start;
 
   /* The other members of struct pbar have useful data that can be
      read by the user but should not be modified. They change across
      calls to pbar_update_() and pbar_print_() */
 
   /* These are private members not available outside the pbar library */
-  st->work_start = work_start;
-  st->work_end = work_end;
-  st->time_start = gettimef();
-  st->time_usage = 0;
-  st->wheel_counter = 0;
-  st->work_lastupdate = st->work_start;
-  st->time_lastupdate = st->time_start;
+  p->parm_start_ = parm_start;
+  p->parm_end_ = parm_end;
+  p->parm_delta_ = p->parm_end_ - p->parm_start_;
+  p->time_start_ = gettimef();
+  p->wheel_count_ = 0;
+  p->parm_lupd_ = parm_start;
+  p->time_lupd_ = p->time_start_;
+}
+
+int pbar_update_(pbar *p, double parm) {
+  double now = gettimef();
+  double dt = now - p->time_lupd_;
+  double oldmark;
   
-  return &(st->public);
-}
+  p->time_elapsed = now - p->time_start_;
+  p->time_remain = (p->parm_end_ - parm) * dt / (parm - p->parm_lupd_);
 
-void pbar_close(pbar *p) {
-  double now = gettimef();
-  state *st = (state *)p;
-  update(st, st->work_end, now);
-  if(isatty(fileno(p->output))) {
-    fputc('\r', st->public.output);
-    print(st, st->work_end);
-    fputc('\n', st->public.output);
-    fflush(st->public.output);
+  if(parm == p->parm_end_) {
+    p->progress = 1;
+  } else {
+    /* fabs() is needed because if p->parm_end_ - p->parm_start_ < 0,
+       then 0 / p->parm_delta_ == -0 */
+    p->progress = fabs((parm - p->parm_start_) / p->parm_delta_);
   }
-  free(st);
-  st->time_usage += gettimef() - now;
-}
 
-int pbar_update_(pbar *p, double work) {
-  double now = gettimef();
-  state *st = (state *)p;
-  int r = update(st, work, now);
-  st->time_usage += gettimef() - now;
-  return r;
-}
+  oldmark = p->mark_;
+  /* Calculation of the next mark after p->update */
+  p->mark_ = parm + p->update * (p->mark_ - p->parm_start_) / p->time_elapsed;
 
-int pbar_print_(pbar *p, double work) {
-  double now = gettimef();
-  state *st = (state *)p;
-  int r = update(st, work, now);
-  if(r && isatty(fileno(p->output))) {
-    fputc('\r', st->public.output);
-    print((state *)p, work);
-    fflush(st->public.output);
+  /* Ensure that p->parm_end_ will be a mark */
+  if((p->inc_ && oldmark < p->parm_end_ && p->mark_ > p->parm_end_)
+     || (!p->inc_ && oldmark > p->parm_end_ && p->mark_ < p->parm_end_)) {
+    p->mark_ = p->parm_end_;
   }
-  st->time_usage += gettimef() - now;
-  return r;
+
+  p->parm_lupd_ = parm;
+  p->time_lupd_ = now;
+
+  /* If dt is too discrepant from p->update, reject this
+     iteration. This will happen in the first 2 or 3 calls to
+     update(). */
+  if(fabs(1 - dt/p->update) > 0.5 && p->progress != 1) return 0;
+
+  if(!isatty(fileno(p->output))) return 0;
+  fputc('\r', p->output);
+  return 1;
+}
+
+void pbar_vshow(pbar *p, char *format, va_list ap) {
+  fields t;
+  fill_fields(p, &t, format, ap);
+  print_fields(p, &t, format, ap);
+  fflush(p->output);
+}
+  
+void pbar_show(pbar *p, char *format, ...) {
+  va_list ap;
+  va_start(ap, format);
+  pbar_vshow(p, format, ap);
+  va_end(ap);
 }
 
 /********************************************************** Public functions **/

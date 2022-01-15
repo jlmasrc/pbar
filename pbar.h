@@ -21,34 +21,43 @@
 #ifndef PBAR_H
 #define PBAR_H
 
-#include <stdio.h>
-
 typedef struct pbar {
-  char *print_format;
-  char *wheel;
-  char bar_fill;
+  /* These can be changed after pbar_init() */
   FILE *output;
-  double update_period;
-  double elapsed_time;
-  double remaining_time;
-  double work_done;
-  double pbar_load;
-  double work_mark;
-  int increasing;
+  double update;
+  char bar_fill;
+  char *wheel;
+
+  /* These can be read after pbar_mark() */
+  double progress;
+  double time_elapsed;
+  double time_remain;
+
+  /* These are private data used by lib pbar */
+  double parm_start_;
+  double parm_end_;
+  double parm_delta_;
+  double parm_lupd_;
+  double time_start_;
+  double time_lupd_;
+  double mark_;
+  int wheel_count_;
+  int inc_;
 } pbar;
 
-pbar *pbar_new(double work_start, double work_end, char *format);
-void pbar_close(pbar *p);
+int pbar_update_(pbar *p, double parm);
 
-int pbar_update_(pbar *p, double work);
-int pbar_print_(pbar *p, double work);
+void pbar_init(pbar *p, double parm_start, double parm_end);
+void pbar_vshow(pbar *p, char *format, va_list ap);
+void pbar_show(pbar *p, char *format, ...);
 
-static inline int pbar_update(pbar *p, double work) {
-  return (p->increasing == (work >= p->work_mark)) && pbar_update_(p, work);
+static inline int pbar_mark(pbar *p, double parm) {
+  return (p->inc_ == (parm > p->mark_) || parm == p->mark_)
+    && pbar_update_(p, parm);
 }
 
-static inline int pbar_print(pbar *p, double work) {
-  return (p->increasing == (work >= p->work_mark)) && pbar_print_(p, work);
+static inline void pbar_mark_show(pbar *p, double parm, char *format) {
+  if(pbar_mark(p, parm)) pbar_show(p, format);
 }
 
 #endif /* PBAR_H */
