@@ -1,5 +1,5 @@
 /*
-  pbar: simple example advanced. Compile with
+  pbar: simple example program. Compile with
   gcc -O3 -o pbar_example_advanced pbar_example_advanced.c pbar.c -lm
 
   Copyright (C) 2022  Joao Luis Meloni Assirati.
