@@ -208,15 +208,19 @@ void pbar_init(pbar *p, double parm_start, double parm_end) {
   p->wheel_count_ = 0;
   p->parm_lupd_ = parm_start;
   p->time_lupd_ = p->time_start_;
+
+  fputs("\033[s", p->output);
 }
 
 int pbar_update_(pbar *p, double parm) {
   double now = gettimef();
+  double dp = parm - p->parm_lupd_;
   double dt = now - p->time_lupd_;
-  double oldmark;
-  
+  double oldmark = p->mark_;
+
+  p->parm_rate = dp / dt;
   p->time_elapsed = now - p->time_start_;
-  p->time_remain = (p->parm_end_ - parm) * dt / (parm - p->parm_lupd_);
+  p->time_remain = (p->parm_end_ - parm) / p->parm_rate;
 
   if(parm == p->parm_end_) {
     p->progress = 1;
@@ -226,9 +230,8 @@ int pbar_update_(pbar *p, double parm) {
     p->progress = fabs((parm - p->parm_start_) / p->parm_delta_);
   }
 
-  oldmark = p->mark_;
   /* Calculation of the next mark after p->update */
-  p->mark_ = parm + p->update * (p->mark_ - p->parm_start_) / p->time_elapsed;
+  p->mark_ = parm + p->update * p->parm_rate;
 
   /* Ensure that p->parm_end_ will be a mark */
   if((p->inc_ && oldmark < p->parm_end_ && p->mark_ > p->parm_end_)
@@ -242,7 +245,7 @@ int pbar_update_(pbar *p, double parm) {
   /* If dt is too discrepant from p->update, reject this
      iteration. This will happen in the first 2 or 3 calls to
      pbar_update(). */
-  if(fabs(1 - dt/p->update) > 0.5 && p->progress != 1) return 0;
+  if(fabs(dt/p->update - 1) > 0.5 && p->progress != 1) return 0;
 
   if(!isatty(fileno(p->output))) return 0;
   fputc('\r', p->output);
@@ -253,6 +256,8 @@ void pbar_vshow(pbar *p, char *format, va_list ap) {
   fields t;
   fill_fields(p, &t, format, ap);
   print_fields(p, &t, format, ap);
+  /* DEBUG
+     fputc('\n', p->output); */
   fflush(p->output);
 }
   

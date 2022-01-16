@@ -28,8 +28,9 @@ typedef struct pbar {
   char bar_fill;
   char *wheel;
 
-  /* These can be read after pbar_mark() */
-  double progress;
+  /* These may be of interest and can be read after pbar_mark() */
+  double progress; /* between 0 and 1 */
+  double parm_rate;
   double time_elapsed;
   double time_remain;
 
